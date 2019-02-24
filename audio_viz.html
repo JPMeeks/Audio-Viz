@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang='en'>
+<head>
+	<meta charset='utf-8' />
+	<link href="https://fonts.googleapis.com/css?family=Comfortaa" rel="stylesheet"> 
+	
+	<title>Web Audio Visualizer</title>
+	<style>
+        body 
+        {
+            background: #2D433A;
+            font-family: 'Comfortaa', bold;
+        }
+
+        canvas 
+        {
+			display: flex;
+			justify-content: center;
+			flex-direction: column;
+			
+            margin: 5px;
+            
+            background: #000000;
+        }
+		
+        #parent
+		{
+			display: flex;
+            justify-content: center;
+            flex-direction: column;
+            
+            background-color: #6e6e6e;
+            
+            width: 100%;
+			
+			margin: auto;
+			
+			align-items: center;
+		}
+		
+		#header
+		{
+			
+		}
+		
+		#footer
+		{
+			
+		}
+		
+        #audioControls
+        {
+            display: flex;
+            justify-content: center;
+            flex-direction: column;
+            
+            width: 100%;
+			
+			margin: auto;
+			
+			align-items: center;
+        }
+	</style>
+	
+	<!--Used for a tutorial-->
+	<!--http://www.javascriptkit.com/javatutors/external.shtml-->
+	<!--Library Source:-->
+	<!--https://github.com/dataarts/dat.gui-->
+	<script type = 'text/javascript' src = 'libs/dat.gui.js'></script>
+	
+	<script>
+        (function()
+        {
+            // some really cool examples
+            //https://people.rit.edu/las3914/330/project_01/audio-visualizer/
+            //https://people.rit.edu/rep4975/330/project1/audio_visualizer.html
+            'use strict';
+
+            const NUM_SAMPLES = 256;
+            const HALF_NUM = NUM_SAMPLES/2
+            const DEFAULT_FILL = '#000000';
+            const DEFAULT_BACK = '#FFFFFF';
+			
+            let audioElement, analyserNode, gainNode, bassFilter, trebFilter;
+
+            let canvas,ctx;
+            let gui;
+			
+            // drawing consts
+            const MAX_RAD = 20; // sets max radius value of beat circles
+            const MAX_SCALE = 2; // set maximum scale of triangles to the beat
+            const MAX_SIZE = 25; // maximum size for rectangles
+			const padding = 20;
+            
+            // sound manipulation toggles
+			let Audio = 
+			{
+				song : 'media/Paris.mp3',
+				volVal : 2, 
+				bassVal : 0, 
+				trebVal : 0,
+				audioDisplay : 'Frequency',	// if true, frequency; if false, waveform
+			};
+            
+            // style manipulation toggles
+			let Style = 
+			{
+				fullScreen		: function(){},
+				cycleVar		: function(){},
+				drawCycle		: false,		// will cycle through all the various drawing types
+				drawCirs		: false,		// toggles circle drawing
+				drawCols 		: true, 		// toggles drawing rectangle columns
+				drawTris 		: false, 	// toggles drawing triangles					
+				drawSpiral 		: false, 	// toggles drawing crazy triangles / spiral		
+				drawLyre 		: false,	// toggles drawing bezier curve lyre strings	
+				darkMode 		: true, 	//												
+				vhsNoise 		: false, 	//
+				draw3D 			: true,		//
+				drawMirror 		: true, 	//
+				drawBlitz 		: false, 	// toggling makes random colors appear and falsh for every shape for every tick
+				brightness 		: 0, 		// used for adjusting the brightness slider
+				gradient		: false,
+				fill			: DEFAULT_BACK, // the fill value that applies to all drawing
+                back			: DEFAULT_FILL	// the background value of the canvas
+			};
+            
+
+            function init()
+            {
+				// set up canvas stuff
+                canvas = document.querySelector('canvas');
+                ctx = canvas.getContext('2d');
+
+                // get reference to <audio> element on page
+                audioElement = document.querySelector('audio');
+                
+                // call our helper function and get an analyser node
+                analyserNode = createWebAudioContextWithAnalyserNode(audioElement);
+
+                // get sound track <select> and Full Screen button working
+                setupUI();
+                // set basic ui setup
+                Style.draw3D = true;
+                Style.drawMirror = true;
+                
+                //
+                setupCanvas();
+
+                // load and play default sound into audio element
+                playStream(audioElement, Audio.song);
+
+                // start animation loop
+                update();
+            }
+
+            function createWebAudioContextWithAnalyserNode(audioElement) 
+            {
+                let audioCtx, analyserNode, sourceNode;
+                // create new AudioContext
+                // The || is because WebAudio has not been standardized across browsers yet
+                // http://webaudio.github.io/web-audio-api/#the-audiocontext-interface
+                audioCtx = new (window.AudioContext || window.webkitAudioContext);
+
+                // create an analyser node
+                analyserNode = audioCtx.createAnalyser();
+
+                // create DelayNode instance
+                gainNode = audioCtx.createGain();
+                gainNode.gain.value = Audio.volVal;
+                
+                // setup the base filter
+                //https://developer.mozilla.org/en-US/docs/Web/API/BiquadFilterNode
+                bassFilter = audioCtx.createBiquadFilter();
+                bassFilter.type = 'lowshelf';
+                bassFilter.frequency.value = 400;   // ranges between 200 and 400
+                bassFilter.gain.value = Audio.bassVal;    // takes value of bassSlider, between -2 and 2
+                
+                // setup the treble filter
+                trebFilter = audioCtx.createBiquadFilter();
+                trebFilter.type = 'highshelf';
+                trebFilter.frequency.value = 2000;  // 
+                trebFilter.gain.value = Audio.trebVal;    // takes value of trebleSlider, between -2 and 2
+
+                // fft stands for Fast Fourier Transform
+                analyserNode.fftSize = NUM_SAMPLES;
+
+                // this is where we hook up the <audio> element to the analyserNode
+                sourceNode = audioCtx.createMediaElementSource(audioElement); 
+
+                // connect source node directly to the speakers so we can hear the unaltered source in this channel
+                sourceNode.connect(audioCtx.destination);
+
+                // this channel will play and visualize the delay
+                sourceNode.connect(analyserNode);
+                analyserNode.connect(bassFilter);
+                //analyserNode.connect(gainNode);
+                bassFilter.connect(trebFilter);
+                trebFilter.connect(gainNode);
+                gainNode.connect(audioCtx.destination);
+
+                return analyserNode;
+            }
+
+            function setupUI()
+            {
+				// set up dat.GUI
+				gui = new dat.GUI();
+				
+				let playerFolder = gui.addFolder('PLAYER');
+				let audioFolder = gui.addFolder('AUDIO');
+				let shapeFolder = gui.addFolder('SHAPE');
+				let styleFolder = gui.addFolder('STYLE');
+				
+				// add player settings
+				playerFolder.add(Audio, 'song', ['media/Gay Activity.mp3', 'media/Rebel Yell.mp3', 'media/Paris.mp3']).onChange(function(e)
+				{
+					playStream(audioElement, Audio.song);
+				});
+				playerFolder.add(Style, 'fullScreen').onChange(function(e)
+				{
+					requestFullscreen(canvas)
+				});
+				
+				// add audio settings
+				audioFolder.add(Audio, 'volVal', -1, 5).step(.5);
+				audioFolder.add(Audio, 'bassVal', -35, 35).step(5);
+				audioFolder.add(Audio, 'trebVal', -35, 35).step(5);
+				audioFolder.add(Audio, 'audioDisplay', ['Frequency', 'Waveform']);
+				
+				// add style settings
+				shapeFolder.add(Style, 'drawCycle').onChange(function(e)
+				{
+					if(Style.drawCycle === false)
+					{
+						clearInterval(Style.cycleVar);
+					}
+					
+					if(Style.drawCycle)
+					{
+						Style.cycleVar = setInterval(recycleShapes, 5000);
+					}
+				}).listen();
+				shapeFolder.add(Style, 'drawCirs').onChange(function(e)
+				{
+					
+					
+					Style.draw3D = true;
+					
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+				}).listen();
+				shapeFolder.add(Style, 'drawCols').onChange(function(e)
+				{
+					
+				 
+					Style.drawMirror = true;
+					
+					Style.drawCirs = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+				}).listen();
+				shapeFolder.add(Style, 'drawTris').onChange(function(e)
+				{
+					
+					
+					Style.drawMirror = true;
+					
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+				}).listen();
+				shapeFolder.add(Style, 'drawSpiral').onChange(function(e)
+				{
+					
+					
+					Style.drawMirror = false;
+					Style.draw3D = true;
+					
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawLyre = false;
+				}).listen();
+				shapeFolder.add(Style, 'drawLyre').onChange(function(e)
+				{
+					
+					
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+				}).listen();
+				
+				styleFolder.addColor(Style, 'fill');
+				styleFolder.add(Style, 'draw3D').listen();
+				styleFolder.add(Style, 'drawMirror').listen();
+				styleFolder.add(Style, 'darkMode').onChange(function(e)
+				{
+					if(Style.back === '#000000')
+					{
+						Style.back = '#FFFFFF';
+						if(Style.fill === '#FFFFFF')
+							Style.fill = '#000000';
+					}
+					else if(Style.back === '#FFFFFF')
+					{
+						Style.back = '#000000';
+						if(Style.fill === '#000000')
+							Style.fill = '#FFFFFF';
+					}
+				}).listen();
+				styleFolder.add(Style, 'drawBlitz').listen();
+				styleFolder.add(Style, 'vhsNoise').listen();
+				styleFolder.add(Style, 'gradient');
+				
+				//playerFolder.open();
+				audioFolder.open();
+				
+				
+				
+                window.addEventListener('resize', setupCanvas, false);
+            }
+            
+            function setupCanvas()
+            {
+                if(window.innerWidth > 640)
+                    canvas.width = self.innerWidth - padding;
+                if(window.innerHeight > 400)
+                    canvas.height = window.innerHeight - padding - 150;
+            }
+
+            function playStream(audioElement,path)
+            {
+                audioElement.src = path;
+                //audioElement.play();
+                audioElement.volume = 0.2;
+                //document.querySelector('#status').innerHTML = 'Now playing: ' + path;
+            }
+
+            function update() 
+            { 
+                // update the audio values
+                gainNode.gain.value = Audio.volVal;
+                bassFilter.gain.value = Audio.bassVal;
+                trebFilter.gain.value = Audio.trebVal;
+                
+
+                // this schedules a call to the update() method in 1/60 seconds
+                requestAnimationFrame(update);
+
+                // create a new array of 8-bit integers (0-255)
+                let data;// = new Uint8Array(HALF_NUM); 
+
+                // populate the array with the frequency data
+                if(Audio.audioDisplay === 'Frequency')
+				{
+					data = new Uint8Array(HALF_NUM);
+					analyserNode.getByteFrequencyData(data);
+				}
+                    
+                if(Audio.audioDisplay === 'Waveform')
+				{
+					data = new Float32Array(HALF_NUM);
+					analyserNode.getFloatTimeDomainData(data);
+				}
+
+				// create gradient
+				let grad = ctx.createLinearGradient(0, canvas.height, canvas.width, canvas.height);
+				grad.addColorStop(0, Style.fill);
+				if(Style.darkMode)
+				{
+					grad.addColorStop(0, Style.fill);
+					grad.addColorStop(0.25, DEFAULT_FILL);
+					grad.addColorStop(0.75, DEFAULT_FILL);
+					grad.addColorStop(1, Style.fill);
+				}
+				else
+				{
+					grad.addColorStop(0, Style.fill);
+					grad.addColorStop(0.25, DEFAULT_BACK);
+					grad.addColorStop(0.75, DEFAULT_BACK);
+					grad.addColorStop(1, Style.fill);
+				}
+					
+				grad.addColorStop(1, Style.fill);
+				//console.log(Style.darkMode);
+				
+				// DRAW!
+				ctx.save();		
+				if(Style.gradient)
+                	ctx.fillStyle = grad;
+				else
+					ctx.fillStyle = Style.back;
+                ctx.clearRect(0,0,canvas.width, canvas.height);
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+				ctx.restore();
+                
+                // circle variables
+                let divVal = NUM_SAMPLES/Math.sqrt(NUM_SAMPLES);    // the number to divide by to determine adequate line spacing for circles, takes the square root of the power 2 NUM_SAMPLES, and divides by that amount
+                let xPos = canvas.width/Math.round(divVal);
+                let xInit = canvas.width/Math.round(divVal) - canvas.width/(Math.round(divVal)*2);
+                let yAdd = canvas.height/(Math.round(divVal)/2);
+                let yPos = canvas.height/Math.round(divVal);
+                
+                // column / rectangle variables
+                let buffer = 40;    // the amount of space left on the ends of the line of rectangles
+                let padding = 4;    // the space in between each rectangle
+                let xSize = ((canvas.width-buffer)/HALF_NUM) - padding;
+                let ySize = canvas.height/HALF_NUM;
+                
+                // triangle and spiral variables
+                let xBase = canvas.width / 2;
+                let yBase = canvas.height / 2;
+                let angle = 360 / (NUM_SAMPLES / 2);
+                let curAngle = angle;
+                let triRad = (canvas.width > canvas.height) ? canvas.height/4 : canvas.width/4;
+                
+                // curve / lyre lines
+                let numPoints = HALF_NUM / 4;
+                let yAxis = canvas.height/(Math.round(divVal)/2);
+				let curveAdd = canvas.width/(numPoints);
+				
+				
+                
+                // loop through the data and draw!
+                ctx.save();
+                for(let x = 0; x < data.length; x++) 
+                { 
+					let percent;// = data[x] / (HALF_NUM - 1);
+					
+					
+					// mirrors the low values of audio to where the high values would be located
+                    if(Style.drawMirror && x > (HALF_NUM/2)-1)
+                    {
+                        //console.log(x);
+                        //console.log(HALF_NUM/2);
+                        data[x] = data[(HALF_NUM/2) - (x-(HALF_NUM/2))];
+                    }
+					
+					// turns waveform data into a more visible display
+                    if(Audio.audioDisplay === 'Waveform')
+                    {
+						percent = (data[x]*10);
+                    }
+					
+					if(Audio.audioDisplay === 'Frequency')
+					{
+						percent = data[x] / 255;
+					}
+					
+					if(Style.drawBlitz)
+					{
+						discoBlitz();
+					}
+                    
+                    if(Style.drawCirs)
+                    {
+                        // draw some circles to pump to the beat
+                        // start with drawing circles, this should only affect the radius
+                        ctx.save();
+                        ctx.fillStyle = Style.fill;
+                        ctx.beginPath();
+
+                        
+                        let rad = MAX_RAD * percent; // 20 is max radius
+                        if(rad < 2)
+                            rad = 2;
+                        if(rad > MAX_RAD)
+                            rad = MAX_RAD;
+                        if(x % Math.round(divVal) === 0 && x != 0)
+                            yPos += yAdd;
+                        
+                        if(!Style.draw3D)
+                            ctx.arc(xInit + xPos * (x % Math.round(divVal)), yPos, 10, 0, 2*Math.PI, false);
+                        else
+                            ctx.arc(xInit + xPos * (x % Math.round(divVal)), yPos, rad, 0, 2*Math.PI, false);
+						
+                        ctx.fill();
+
+                        ctx.closePath();
+                        ctx.restore();
+                    }
+                    
+                    if(Style.drawCols)
+                    {
+                        // draw 16 columns of 16 squares tall, the amount in a stack varies by the level at which music is playing in that column, using data
+                        // get a percent, divide it by 16, then draw that many rectangles in a stack
+                        
+                        let colHeight = Math.round(percent*16); // 16 serves as max height here
+                        
+                        (x === 0) ? ctx.translate(buffer / 2 + padding, 0) : ctx.translate(xSize + padding, 0);
+                        
+                        ctx.save();
+                        ctx.fillStyle = Style.fill;
+                        
+                        // draw base square
+                        ctx.fillRect(0, (canvas.height/2) - (ySize/2), xSize, ySize);
+                        
+                        
+                        ctx.save();
+                        for(let y = 0; y < colHeight; y++)
+                        {
+                            ctx.translate(0, -(ySize + (padding/2)));
+                            ctx.fillRect(0, (canvas.height/2) - (ySize/2), xSize, ySize);
+                        }
+                        ctx.restore();
+                        
+                        ctx.save();
+                        for(let y = 0; y < colHeight; y++)
+                        {
+                            ctx.translate(0, (ySize + (padding/2)));
+                            ctx.fillRect(0, (canvas.height/2) - (ySize/2), xSize, ySize);
+                        }
+                        ctx.restore();
+                        
+                        ctx.restore();
+                    }
+                    
+                    if(Style.drawTris)
+                    {
+                        // draw a collection of triangles that form a circle around the center of the screen, translating them from the center. adnscaling them if 'Style.draw3D' has been turned on
+                        
+                        // draw base tris
+                        ctx.save();
+                        ctx.fillStyle = Style.fill;
+                        ctx.strokeStyle = Style.fill;
+						ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        
+                        
+                        // x = r * sin(angle)
+                        // y = r * cos(angle)
+                        
+                        ctx.translate(xBase, yBase);
+                        ctx.translate((triRad * Math.sin((Math.PI/180)*angle*x)), (triRad * Math.cos((Math.PI/180)*angle*x)));
+                        curAngle -= angle;
+                        ctx.rotate(((Math.PI/180)*curAngle)+(Math.PI/2));
+                       
+                        //if(x === 0 )
+                        //ctx.rotate(Math.PI/4);
+                        
+                        if(Style.draw3D)
+                        {
+                            let scale = MAX_SCALE * percent;
+                            if(scale < .5)
+                                scale = .5;
+                            if(scale > MAX_SCALE)
+                                scale = MAX_SCALE;
+                            ctx.scale(scale, scale);
+                        }
+                        
+                        
+                        let size = ((canvas.width + canvas.height) / 4) * .1;
+                        let point = (size/2) * percent * 4;
+                        
+                        ctx.moveTo(-size/2, size/4);
+                        ctx.lineTo(point, 0);
+                        ctx.lineTo(-size/2, -size/4);
+						
+                        ctx.closePath();
+                        //ctx.fill();
+                        ctx.stroke();
+                        
+                        ctx.restore();
+                    }
+                    
+                    if(Style.drawSpiral)
+                    {
+                        // this started out as a bug, but now draws a mishapen spiral of triangles that pump to the music
+                        
+                        // draw base tris
+                        ctx.save();
+                        ctx.fillStyle = Style.fill;
+                        ctx.strokeStyle = Style.fill;
+                        ctx.beginPath();
+                        
+                        let percentage = data[x] / 255;
+                        
+                        // x = r * sin(angle)
+                        // y = r * cos(angle)
+                        
+                        ctx.translate(xBase, yBase);
+                        ctx.translate((triRad * Math.sin((Math.PI/180)*angle*x)), (triRad * Math.cos((Math.PI/180)*angle*x)));
+                        
+                        ctx.rotate((Math.PI/180)*angle*x);
+                        
+                        if(Style.draw3D)
+                        {
+                            let scale = MAX_SCALE * percent;
+                            if(scale > MAX_SCALE)
+                                scale = MAX_SCALE;
+                            ctx.scale(scale, scale);
+                        }
+                        
+                        
+                        let size = ((canvas.width + canvas.height) / 2) * .1;
+                        let point = (size/2) * percent * 2;
+                        
+                        ctx.moveTo(-size/2, size/4);
+                        ctx.lineTo(point, 0);
+                        ctx.lineTo(-size/2, -size/4);
+						
+                        ctx.closePath();
+                        ctx.stroke();
+                        
+                        ctx.restore();
+                    }
+                    
+                    if(Style.drawLyre)
+                    {
+                        ctx.save();
+						ctx.beginPath();
+                        ctx.strokeStyle = Style.fill;
+                        ctx.lineWidth = 5;
+                        
+                        // draw the curves
+                        if(x % numPoints === 0 && x != 0)
+                        {
+                            yAxis += canvas.height/4;
+                        }
+                        
+						let xAxis = curveAdd * (x % numPoints);	// the x-positon where each line segment starts
+						let modValue = canvas.height/4 * percent;
+						
+                        ctx.moveTo(xAxis, yAxis);
+						
+						// modulates y position up or down by audio amount based on control point
+                        ctx.bezierCurveTo(xAxis + (curveAdd/3), yAxis + modValue, xAxis + (2 * (curveAdd/3)), yAxis - modValue, xAxis + curveAdd, yAxis);
+						
+						//ctx.closePath();
+						
+                        ctx.stroke();
+                        ctx.restore();
+                    }
+                    //debugger;
+                }
+                ctx.restore();
+
+                manipulatePixels();
+            } 
+
+            // HELPER
+            function makeColor(red, green, blue, alpha)
+            {
+                let color='rgba('+red+','+green+','+blue+', '+alpha+')';
+                return color;
+            }
+
+             // FULL SCREEN MODE
+            function requestFullscreen(element) 
+            {
+                if (element.requestFullscreen) 
+                {
+                    element.requestFullscreen();
+                } 
+                else if (element.mozRequestFullscreen) 
+                {
+                    element.mozRequestFullscreen();
+                } 
+                else if (element.mozRequestFullScreen) 
+                { 
+                    // camel-cased 'S' was changed to 's' in spec
+                    element.mozRequestFullScreen();
+                } 
+                else if (element.webkitRequestFullscreen) 
+                {
+                    element.webkitRequestFullscreen();
+                }
+                // .. and do nothing if the method is not supported
+            };
+
+            function manipulatePixels()
+            {
+                // 1st, gets all of the rgba pixel data of the canvas by grabbing the imagedata
+                // ImageData Object
+                let imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+                // 2nd, imageData.data is an 8-bit typed array - values range from 0-255
+                // imageData.data containts 4 values per pixel, R-G-B and an alpha value, times height and width of the canvas
+                let data = imageData.data;
+                let length = data.length;
+                var width = imageData.width;
+
+                // 3rd, iterate through each pixel, stepping by 4, so we can manipulate a pixel at a time
+                //data[x]
+                //data[x+1]
+                //data[x+2]
+                //data[x+3]
+
+                for(let x = 0; x < length; x += 4)
+                {
+                    // will attempt to flip dark colors and light colors, will flip black and white
+                    //if(Style.darkMode)
+                    //{
+                    //    let r = data[x], g = data[x+1], b = data[x+2];
+					//	
+                    //    data[x] = 255 - r;
+                    //    data[x+1] = 255 - g;
+                    //    data[x+2] = 255 - b;
+                    //    
+                    //    data[x + 3] = 255;
+					//	
+					//	
+                    //}
+
+                    // needs more work!
+                    if(Style.vhsNoise && Math.random() < .2)
+                    {
+                        // create a VCR static effect
+                        //let rando = Math.random(3);
+						
+						data[x] = data[x + 1] = data[x + 2] = 128; // grey noise
+
+                        
+                    }
+                }
+
+                // put modified data back onto the canvas
+                ctx.putImageData(imageData, 0, 0);
+            };
+			
+			// generates a random color when called and assigns it to fill variable
+			function discoBlitz()
+			{
+				Style.fill = 'rgb(' + Math.random() * 255 + ', ' + Math.random() * 255 + ', ' + Math.random() * 255 + ')';
+			}
+			
+			function recycleShapes()
+			{
+				if(Style.drawCirs)
+				{
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+					
+					Style.drawLyre = true;
+				}
+				else if(Style.drawCols)
+				{
+					Style.draw3D = true;
+					
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+					
+					Style.drawCirs = true;
+				}
+				else if(Style.drawTris)
+				{
+					Style.drawMirror = true;
+					
+					Style.drawCirs = false;
+					Style.drawTris = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+					
+					Style.drawCols = true;
+				}
+				else if(Style.drawSpiral)
+				{
+					Style.drawMirror = true;
+					
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawSpiral = false;
+					Style.drawLyre = false;
+					
+					Style.drawTris = true;
+				}
+				else if(Style.drawLyre)
+				{
+					Style.drawMirror = false;
+					Style.draw3D = true;
+					
+					Style.drawCirs = false;
+					Style.drawCols = false;
+					Style.drawTris = false;
+					Style.drawLyre = false;
+					
+					Style.drawSpiral = true;
+				}
+			}
+
+            window.addEventListener('load',init);
+        }());
+						
+	</script>
+</head>
+<body>
+	<div id = 'parent'>
+		<div id = 'header'>
+			<h2><b>Audio Visualizer</b></h2>
+		</div>
+
+		<canvas id='canvas' width='640' height='400'></canvas>
+
+		<div id = 'audioControls'>
+			<audio controls loop class = 'child'></audio>    
+		</div>
+		<div id = 'footer'>
+			<p>Preston Meeks</p>
+		</div>
+	</div>
+</body>
+</html>
